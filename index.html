@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Sentiment Analysis | Predict E-Commerce Reviews</title>
+    <meta name="description"
+        content="Real-time multilingual sentiment analysis dashboard for e-commerce reviews with OCR and ensemble ML models.">
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <header>
+        <!-- <div class="header-badge">
+            <span class="dot"></span>
+            System Online
+        </div> -->
+        <h1>Sentiment Analysis</h1>
+        <p class="subtitle">Real-time multilingual &amp; image sentiment analysis for e-commerce reviews</p>
+    </header>
+
+    <div class="container">
+        <!-- Live Prediction Card -->
+        <div class="glass-card">
+            <div class="nav-tabs">
+                <button class="tab-btn active" onclick="switchTab('text')">Text Review</button>
+                <button class="tab-btn" onclick="switchTab('image')">Image Upload</button>
+                <button class="tab-btn" onclick="switchTab('batch')">Batch CSV</button>
+            </div>
+
+            <div id="text-input-section">
+                <div class="section-header">
+                    <h2>Analyze Text</h2>
+                    <span class="model-badge">Ensemble (SVC+LR+NB)</span>
+                </div>
+                <textarea id="review-text"
+                    placeholder="Paste a customer review here (multilingual supported)..."></textarea>
+
+                <div class="controls-row">
+                    <button class="demo-btn" onclick="loadDemo()">✦ Load Demo Samples</button>
+                    <select id="model-select" style="margin-bottom: 0; flex-grow: 1;">
+                        <option value="ensemble">Ensemble Model v2 (Standard)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="image-upload-section" style="display: none;">
+                <h2>Analyze Screenshot</h2>
+                <p class="helper-text">Upload an image containing text to use the EasyOCR integration.</p>
+                <input type="file" id="image-file" accept="image/png, image/jpeg">
+            </div>
+
+            <div id="batch-upload-section" style="display: none;">
+                <h2>Batch Process CSV</h2>
+                <p class="helper-text">Upload a CSV with a <code
+                        style="background: var(--bg-input); padding: 2px 6px; border-radius: 4px; font-size: 0.8em;">reviewText</code>
+                    column.</p>
+                <input type="file" id="batch-file" accept=".csv">
+                <label class="section-label">Select Backend Model</label>
+                <select id="batch-model-select">
+                    <option value="baseline">Baseline ML</option>
+                    <option value="mbert">mBERT</option>
+                </select>
+            </div>
+
+            <button id="analyze-btn" onclick="analyze()">Analyze Sentiment</button>
+            <div class="loader" id="loader">Processing request…</div>
+
+            <!-- Single Result Box -->
+            <div class="result-box" id="result-box">
+                <div id="translation-info" class="translation-info" style="display:none;">
+                    <div class="label">🌏 Multilingual Detection</div>
+                    <div id="lang-detected" style="margin-bottom: 3px;">Language: </div>
+                    <div id="trans-text" style="font-style: italic; color: var(--text-tertiary);">"..."</div>
+                </div>
+
+                <div class="result-label">Primary Prediction</div>
+                <span class="sentiment-badge" id="sentiment-badge">POSITIVE</span>
+
+                <div class="stat-row">
+                    <span>Confidence Score</span>
+                    <span id="confidence-val">0%</span>
+                </div>
+                <div class="confidence-bar-bg">
+                    <div class="confidence-bar-fill" id="confidence-bar"></div>
+                </div>
+                <div class="stat-row">
+                    <span>Active Meta-Model</span>
+                    <span id="engine-used">Ensemble v4</span>
+                </div>
+                <p id="extracted-text-display"></p>
+
+                <!-- Showdown Section -->
+                <div id="showdown-container" class="showdown-container">
+                    <div class="showdown-title">Model Showdown Comparison</div>
+                    <div id="showdown-grid" class="showdown-grid">
+                        <!-- Injected by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard / Visualizations -->
+        <div class="glass-card">
+            <div class="analytics-header">
+                <h2>Real-time Analytics</h2>
+            </div>
+            <p class="analytics-desc">Distribution of sentiments analyzed so far.</p>
+            <canvas id="sentimentChart"></canvas>
+
+            <div class="history-section">
+                <div class="history-title">Recent History</div>
+                <div id="history-container">
+                    <p style="font-size: 0.8125rem; color: var(--text-tertiary);">No reviews processed yet.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <footer>Built with FastAPI &amp; Ensemble ML — Capstone Project</footer>
+
+    <script>
+        const API_BASE = "http://127.0.0.1:8000";
+        let currentMode = 'text';
+
+        // Chart Init
+        let sentimentCounts = { Positive: 0, Neutral: 0, Negative: 0 };
+        const ctx = document.getElementById('sentimentChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Positive', 'Neutral', 'Negative'],
+                datasets: [{
+                    data: [0, 0, 0],
+                    backgroundColor: ['#34d399', '#a78bfa', '#f87171'],
+                    borderWidth: 0,
+                    hoverOffset: 4
+                }]
+            },
+            options: {
+                cutout: '75%',
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            color: '#a1a1aa',
+                            font: { family: 'Inter', size: 12, weight: '500' },
+                            padding: 16,
+                            usePointStyle: true,
+                            pointStyleWidth: 8
+                        }
+                    }
+                }
+            }
+        });
+
+        function switchTab(mode) {
+            currentMode = mode;
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+
+            document.getElementById('text-input-section').style.display = mode === 'text' ? 'block' : 'none';
+            document.getElementById('image-upload-section').style.display = mode === 'image' ? 'block' : 'none';
+            document.getElementById('batch-upload-section').style.display = mode === 'batch' ? 'block' : 'none';
+
+            // hide result
+            document.getElementById('result-box').style.display = 'none';
+        }
+
+        async function analyze() {
+            const btn = document.getElementById('analyze-btn');
+            const loader = document.getElementById('loader');
+            const resultBox = document.getElementById('result-box');
+
+            btn.disabled = true;
+            loader.style.display = 'block';
+            resultBox.style.display = 'none';
+            document.getElementById('extracted-text-display').style.display = 'none';
+
+            try {
+                if (currentMode === 'text') {
+                    const text = document.getElementById('review-text').value;
+                    if (!text.trim()) { alert("Please enter some text!"); throw new Error("Empty text"); }
+
+                    const res = await fetch(`${API_BASE}/predict/text`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ text })
+                    });
+                    const data = await res.json();
+                    if (data.error) {
+                        alert(data.error);
+                    } else {
+                        displayResult(data.sentiment, data.confidence, data.model, text, data);
+                    }
+
+                } else if (currentMode === 'image') {
+                    const fileInput = document.getElementById('image-file');
+                    if (fileInput.files.length === 0) { alert("Please upload an image!"); throw new Error("No image"); }
+
+                    const formData = new FormData();
+                    formData.append("file", fileInput.files[0]);
+
+                    const res = await fetch(`${API_BASE}/predict/image`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await res.json();
+                    if (data.error) {
+                        alert(data.error);
+                    } else {
+                        // Show extracted OCR text
+                        if (data.extracted_text) {
+                            document.getElementById('extracted-text-display').innerText = `📝 Extracted OCR Text: "${data.extracted_text}"`;
+                            document.getElementById('extracted-text-display').style.display = 'block';
+                        }
+                        displayResult(data.sentiment, data.confidence, data.model, data.extracted_text || "Image Upload", data);
+                    }
+
+                } else if (currentMode === 'batch') {
+                    const fileInput = document.getElementById('batch-file');
+                    if (fileInput.files.length === 0) { alert("Please upload a CSV file!"); throw new Error("No csv"); }
+
+                    const formData = new FormData();
+                    formData.append("file", fileInput.files[0]);
+
+                    const res = await fetch(`${API_BASE}/predict/batch`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await res.json();
+
+                    if (data.error) {
+                        alert("Error: " + data.error);
+                    } else {
+                        // Update chart with all batch results
+                        data.sample_results.forEach(item => {
+                            if (item.Predicted_Sentiment !== 'Unknown') {
+                                updateChart(item.Predicted_Sentiment);
+                            }
+                        });
+
+                        // Show batch results in the result box
+                        resultBox.style.display = 'block';
+                        document.getElementById('translation-info').style.display = 'none';
+                        document.getElementById('showdown-container').style.display = 'none';
+
+                        // Build summary
+                        const badge = document.getElementById('sentiment-badge');
+                        badge.className = 'sentiment-badge badge-positive';
+                        badge.innerText = `${data.total_processed} Reviews Processed`;
+
+                        document.getElementById('confidence-val').innerText = '';
+                        document.getElementById('confidence-bar').style.width = '100%';
+                        document.getElementById('engine-used').innerText = 'Ensemble Batch Mode';
+
+                        // Build a results table
+                        const extractedDisplay = document.getElementById('extracted-text-display');
+                        let summaryHTML = `<div style="margin-top: 10px;">`;
+                        summaryHTML += `<div class="showdown-title" style="margin-bottom: 12px;">📊 Batch Summary</div>`;
+                        summaryHTML += `<div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">`;
+                        for (const [sentiment, count] of Object.entries(data.summary)) {
+                            const color = sentiment === 'Positive' ? 'var(--positive)' : sentiment === 'Neutral' ? 'var(--neutral)' : sentiment === 'Negative' ? 'var(--negative)' : 'var(--text-tertiary)';
+                            const bgColor = sentiment === 'Positive' ? 'var(--positive-soft)' : sentiment === 'Neutral' ? 'var(--neutral-soft)' : sentiment === 'Negative' ? 'var(--negative-soft)' : 'var(--bg-input)';
+                            summaryHTML += `<div style="background: ${bgColor}; padding: 12px 18px; border-radius: var(--radius-sm); border: 1px solid ${color}20;">
+                                <span style="color: ${color}; font-weight: 700; font-size: 1.25rem; font-variant-numeric: tabular-nums;">${count}</span>
+                                <span style="color: var(--text-secondary); font-size: 0.8125rem; margin-left: 6px;">${sentiment}</span>
+                            </div>`;
+                        }
+                        summaryHTML += `</div>`;
+
+                        // Results table
+                        summaryHTML += `<div style="max-height: 300px; overflow-y: auto; border-radius: var(--radius-sm); border: 1px solid var(--border-subtle);">`;
+                        summaryHTML += `<table style="width: 100%; border-collapse: collapse; font-size: 0.8125rem;">`;
+                        summaryHTML += `<thead><tr style="background: var(--bg-elevated); position: sticky; top: 0;">
+                            <th style="padding: 10px 12px; text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-default); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;">#</th>
+                            <th style="padding: 10px 12px; text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-default); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;">Review Text</th>
+                            <th style="padding: 10px 12px; text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-default); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;">Sentiment</th>
+                            <th style="padding: 10px 12px; text-align: left; color: var(--text-secondary); border-bottom: 1px solid var(--border-default); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;">Confidence</th>
+                        </tr></thead><tbody>`;
+
+                        data.sample_results.forEach((item, i) => {
+                            const color = item.Predicted_Sentiment === 'Positive' ? 'var(--positive)' : item.Predicted_Sentiment === 'Neutral' ? 'var(--neutral)' : item.Predicted_Sentiment === 'Negative' ? 'var(--negative)' : 'var(--text-tertiary)';
+                            const textSnippet = item.text && item.text.length > 60 ? item.text.substring(0, 60) + '...' : (item.text || '—');
+                            summaryHTML += `<tr style="border-bottom: 1px solid var(--border-subtle); transition: background 150ms;">
+                                <td style="padding: 10px 12px; color: var(--text-tertiary); font-variant-numeric: tabular-nums;">${i + 1}</td>
+                                <td style="padding: 10px 12px; color: var(--text-primary);">${textSnippet}</td>
+                                <td style="padding: 10px 12px; color: ${color}; font-weight: 600;">${item.Predicted_Sentiment}</td>
+                                <td style="padding: 10px 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums;">${item.confidence ? Math.round(item.confidence * 100) + '%' : '—'}</td>
+                            </tr>`;
+                            // Add to history
+                            addHistory(textSnippet, item.Predicted_Sentiment);
+                        });
+
+                        summaryHTML += `</tbody></table></div></div>`;
+                        extractedDisplay.innerHTML = summaryHTML;
+                        extractedDisplay.style.display = 'block';
+                    }
+                }
+            } catch (err) {
+                console.error(err);
+            } finally {
+                btn.disabled = false;
+                loader.style.display = 'none';
+            }
+        }
+
+        function displayResult(sentiment, confidence, modelUsed, textSource, fullData) {
+            const resultBox = document.getElementById('result-box');
+            const badge = document.getElementById('sentiment-badge');
+            const confBar = document.getElementById('confidence-bar');
+            const transInfo = document.getElementById('translation-info');
+
+            resultBox.style.display = 'block';
+            document.getElementById('showdown-container').style.display = 'block';
+
+            // Translation / Multilingual Info
+            if (fullData && fullData.source_lang && fullData.source_lang !== 'en') {
+                transInfo.style.display = 'block';
+                document.getElementById('lang-detected').innerText = `Detected Language: ${fullData.source_lang.toUpperCase()}`;
+                document.getElementById('trans-text').innerText = `Translated: "${fullData.translated_text}"`;
+            } else {
+                transInfo.style.display = 'none';
+            }
+
+            // Primary Badge
+            badge.className = 'sentiment-badge';
+            badge.innerText = sentiment;
+            if (sentiment === 'Positive') badge.classList.add('badge-positive');
+            else if (sentiment === 'Neutral') badge.classList.add('badge-neutral');
+            else badge.classList.add('badge-negative');
+
+            const confPercent = Math.round(confidence * 100);
+            document.getElementById('confidence-val').innerText = `${confPercent}%`;
+            document.getElementById('engine-used').innerText = modelUsed;
+
+            setTimeout(() => {
+                confBar.style.width = `${confPercent}%`;
+            }, 100);
+
+            // Showdown Injection
+            const grid = document.getElementById('showdown-grid');
+            grid.innerHTML = "";
+            if (fullData && fullData.showdown) {
+                Object.keys(fullData.showdown).forEach(mName => {
+                    const mData = fullData.showdown[mName];
+                    const row = document.createElement('div');
+                    row.className = 'showdown-row';
+
+                    const color = mData.sentiment === 'Positive' ? 'var(--positive)' : mData.sentiment === 'Neutral' ? 'var(--neutral)' : 'var(--negative)';
+
+                    row.innerHTML = `
+                        <span class="showdown-model-name">${mName}</span>
+                        <span class="showdown-result" style="color: ${color};">${mData.sentiment} (${Math.round(mData.confidence * 100)}%)</span>
+                    `;
+                    grid.appendChild(row);
+                });
+            }
+
+            updateChart(sentiment);
+            addHistory(textSource, sentiment);
+        }
+
+        function updateChart(sentiment) {
+            sentimentCounts[sentiment] += 1;
+            chart.data.datasets[0].data = [sentimentCounts.Positive, sentimentCounts.Neutral, sentimentCounts.Negative];
+            chart.update();
+        }
+
+        function addHistory(text, sentiment) {
+            const container = document.getElementById('history-container');
+            if (container.innerHTML.includes("No reviews processed")) {
+                container.innerHTML = "";
+            }
+            const snippet = text.length > 50 ? text.substring(0, 50) + "..." : text;
+            const div = document.createElement('div');
+            let color = sentiment === 'Positive' ? 'var(--positive)' : sentiment === 'Neutral' ? 'var(--neutral)' : 'var(--negative)';
+            div.innerHTML = `<span style="color: ${color}; font-weight:600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em;">[${sentiment}]</span> <span style="color:var(--text-secondary); font-size: 0.8125rem;">${snippet}</span>`;
+            div.style.padding = "10px 0";
+            div.style.borderBottom = "1px solid var(--border-subtle)";
+            container.prepend(div);
+        }
+
+        function loadDemo() {
+            const demos = [
+                { text: "This is the best purchase I have ever made. High quality!", sentiment: "Positive", conf: 0.99 },
+                { text: "Absolute garbage. Stopped working after one use.", sentiment: "Negative", conf: 0.98 },
+                { text: "It is an okay product. Does the job but feels a bit cheap.", sentiment: "Neutral", conf: 0.92 },
+                { text: "Fantastic product! Exceeded my expectations.", sentiment: "Positive", conf: 0.97 },
+                { text: "Waste of money. Does not fit as described.", sentiment: "Negative", conf: 0.96 }
+            ];
+
+            demos.forEach(d => {
+                updateChart(d.sentiment);
+                addHistory(d.text, d.sentiment);
+            });
+            alert("Demo data loaded into history and analytics!");
+        }
+    </script>
+</body>
+
+</html>

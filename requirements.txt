@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pandas
+numpy
+scikit-learn
+imbalanced-learn
+easyocr
+python-multipart
+joblib
+chardet
+nltk
+deep-translator
+langdetect
+scipy
